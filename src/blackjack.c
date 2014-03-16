@@ -41,11 +41,15 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <math.h>
 #include <unistd.h>
 #include <sys/wait.h>
 #include "restart.h"
 #include "helpers.h"
+
+
+// ========================================= CARD =================================================
 
 // I guess this is irrelevant to blackjack but whatever
 #ifndef Suite
@@ -99,6 +103,10 @@ bool card_destroy(Card *card) {
 	free(card);
 	return TRUE;
 }
+
+// ========================================= CARD =================================================
+
+// ========================================= PLAYER =================================================
 
 #ifndef Player
 /**
@@ -283,8 +291,9 @@ int player_cmp(Player *player,Player *dealer) {
 	// lost
 	return -1;
 }
+// ========================================= PLAYER =================================================
 
-
+// ========================================= BLACKJACK =================================================
 #ifndef Blackjack
 /**
  * Representation of game state
@@ -442,10 +451,153 @@ bool blackjack_remove_player(Blackjack *game,Player *player) {
 	}
 	return found;
 }
+// ========================================= BLACKJACK =================================================
+
+
+// ========================================= CLIENT =================================================
+#ifndef Client
+/**
+ * An interface to communicate via pipes
+ */
+typedef struct Client {
+	int id;
+	pid_t pid;
+	int sfd[2]; // pipe fds for stdout
+	int rfd[2]; // pipe fds for read
+	int wfd[2]; // pipe fds for write
+} Client;
+Client *client_create(int id);
+bool client_close(Client *client);
+int client_main();
+bool client_destroy(Client *client);
+int client_printf(Client *client,const char *fmt,...);
+int client_sendline(Client *client,const char *fmt,...);
+char *client_readline(Client *client);
+#endif
+
+Client *client_create(int id) {
+	Client *client = malloc(sizeof(Client));
+	assert(client != NULL);
+
+	client->id = id;
+
+	// Create the pipes
+	assert(pipe(client->rfd) !=-1); // for read
+	assert(pipe(client->wfd) !=-1); // for read
+
+	// Fork the process
+	client->pid = fork();
+	assert(client->pid != -1);
+
+	// If child, do client_main()
+	if (client->pid==0) {
+		assert(r_close(client->rfd[0])!=-1); // client writes to rfd1, close 0
+		assert(r_close(client->wfd[1])!=-1); // client reads from wrf0, close 1;
+
+		client_main(client);
+	} else {
+		assert(r_close(client->rfd[1])!=-1); // parent reads from rfd0, close 1
+		assert(r_close(client->wfd[0])!=-1); // parent writes to wfd1, close 0
+	}
+
+	// Return object client to parent;
+	return client;
+}
+
+/**
+ * Send a line to the child, if used in the child process
+ * it sends a line to the parent.
+ */
+int client_sendline(Client *client,const char *fmt,...) {
+	int fd = client->wfd[1]; // parent
+	if (client->pid==0) {
+		fd=client->rfd[1]; // child
+	}
+	char *msg;
+	va_list args;
+	va_start(args,fmt);
+	vasprintf(&msg,fmt,args);
+	int nbytes = r_write(fd,msg,(size_t)strlen(msg));
+	nbytes += r_write(fd,"\n",1);
+	client_printf(client,"Wrote '%s'\n",msg);
+	va_end(args);
+	free(msg);
+	return nbytes;
+}
+
+/**
+ * Read a line from the child, if used in the child process
+ * it reads a line from the parent.
+ */
+char *client_readline(Client *client) {
+	int fd = client->rfd[0]; // parent
+	if (client->pid==0) {
+		fd=client->wfd[0]; // child
+	}
+	char *buf;
+	r_readline(fd,buf,256);
+	client_printf(client,"Read '%s'\n",buf);
+	return buf;
+}
+
+/**
+ * Client process function
+ */
+int client_main(Client *client) {
+	char *resp;
+	size_t buf = 256;
+	client_printf(client,"Hello from the client!\n");
+
+	while(TRUE) {
+		client_printf(client,"Waiting for cmd...\n");
+		char *cmd = client_readline(client);
+
+		// TODO: Handle the cmd;
+		if (h_str_in(cmd,(char *[]){"AMT\n","bet\n"})) {
+			client_printf(client,"How much money are you playing with?\n");
+			getline(&resp, &buf, stdin);
+			client_sendline(client,"%s",resp);
+		} else if (h_str_in(cmd,(char *[]){"BET\n","bet\n"}))  {
+			client_printf(client,"What is your bet?\n");
+			getline(&resp, &buf, stdin);
+			client_sendline(client,"%s",resp);
+		}/* else if (h_str_in(cmd,(char*[]){"HIT\n","hit\n"})) {
+			client_printf(client,"Would you like to hit (Y/N)?\n");
+			getline(&resp, &buf, stdin);
+			client_sendline(client,"%s",resp);
+		}
+		*/
+		// if cmd==bet;
+		// elif cmd==hit;
+		// elif cmd==cards;
+		// etc...
+		free(cmd);
+	};
+	client_printf(client,"Goodbye!\n");
+	return EXIT_SUCCESS;
+}
+
+int client_printf(Client *client,const char *fmt,...) {
+	int bytes = 0;
+	if(client->pid==0){
+		bytes +=printf("[Player%i] ",client->id);
+	} else {
+		bytes +=printf("[Dealer ] ");
+	}
+	va_list args;
+	va_start(args,fmt);
+	bytes +=vprintf(fmt,args);
+	va_end(args);
+	fflush(stdout);
+	return bytes;
+}
+
+// ========================================= CLIENT =================================================
 
 int main(int argc, char *argv[]) {
 	Player *dealer;Player *player;
 	Blackjack *game;
+	Client *clients[14];
 	int num_players;
 	int i;
 	char *cmd=NULL;
@@ -462,16 +614,20 @@ int main(int argc, char *argv[]) {
 		exit(1);
 	}
 
+	printf("\nWelcome to blackjack:\n");
+	printf("-----------------------------------\n");
+
 	// TODO: Create a client process for each player here
 	// For now do everything in one until it's working
+	for(i=1;i<num_players+1;i++) { // so index is same as player
+		clients[i] = client_create(i);
+	}
 
 	// Init the the game
 	num_players++; // +1 for dealer
 	game = blackjack_create(num_players);
 	dealer = game->players[0];
 
-	printf("\nWelcome to blackjack:\n");
-	printf("-----------------------------------\n");
 
 	// When a player enters the game, they will tell the dealer the
 	// amount of money they will use to begin the game.
@@ -479,9 +635,11 @@ int main(int argc, char *argv[]) {
 		player = game->players[i];
 
 		// TODO: Ask how much they're playing with
-		// TODO: Ask each player to bet and handle responses
-		printf("Player %i, how much money are you playing with?\n",player->id);
-		getline(&cmd, &buf, stdin);
+		// TODO: Ask each player to bet and handle responses/
+		//printf("Player %i, how much money are you playing with?\n",player->id);
+		//getline(&cmd, &buf, stdin);
+		client_sendline(clients[i],"AMT");
+		cmd = client_readline(clients[i]);
 		double money = strtod(cmd,NULL);
 
 		player->money = money;
@@ -502,14 +660,16 @@ int main(int argc, char *argv[]) {
 			player = game->players[i];
 
 			// TODO: Ask each player to bet and handle responses
-			printf("Player %i, what is your bet?\n",player->id);
-			getline(&cmd, &buf, stdin);
+			//printf("Player %i, what is your bet?\n",player->id);
+			//getline(&cmd, &buf, stdin);
+			client_sendline(clients[i],"BET");
+			cmd = client_readline(clients[i]);
 			double bet = strtod(cmd,NULL);
 
 			if (bet>0 && player_bet(player,bet)) {
 				printf("Player %i bet $%0.2f.\n",player->id,player->bet);
 			} else {
-				printf("Player %i stopped playing.\n",player->id);
+				printf("Player %i left the table with $%0.2f.\n",player->id,player->money);
 				assert(blackjack_remove_player(game,player));
 				i--;
 			}
@@ -529,12 +689,18 @@ int main(int argc, char *argv[]) {
 			printf("-----------------------------------\n");
 			printf("Player %i has cards %s.\n",player->id,player_cards_to_str(player));
 
+			client_sendline(clients[i],"CARDS:%s",player_cards_to_str(player));
+			//cmd = client_readline(clients[i]);
+
 			while (!(player->busted)) {
-				printf("Player %i, would you like to hit?\n",player->id);
-				getline(&cmd, &buf, stdin);
+				//printf("Player %i, would you like to hit?\n",player->id);
+				//getline(&cmd, &buf, stdin);
+				client_sendline(clients[i],"HIT");
+				cmd = client_readline(clients[i]);
 				if (!(h_str_in(cmd,(char *[]){"Y\n","y\n"}))){break;}
 				assert(blackjack_deal_card(game,player));
 				printf("Player %i hit and got [%s] giving score of %i.\n",player->id,card_to_str(player->cards[player->_num_cards-1]),player->score);
+				client_sendline(clients[i],"CARDS:%s\n",player_cards_to_str(player));
 			}
 			if (player->busted) {
 				printf("Player %i busted.\n",player->id);
