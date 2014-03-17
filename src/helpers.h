@@ -14,7 +14,6 @@ typedef enum { FALSE, TRUE } bool;
 int h_mk_argv(const char *s, const char *delimiters, char ***argvp);
 pid_t h_run_cmd(const char *cmd,const bool wait);
 int h_len(const char** array);
-bool h_str_in(const char *s, const char *a[]);
 
 
 #if defined(__SVR4) && defined(__sun)

@@ -32,6 +32,22 @@
 #define D_MILLION 1000000.0
 #endif
 
+/**
+ * The following code segment waits for all children that have finished but avoids blocking if there
+ * are no children whose status is available. It restarts waitpid if that function is interrupted by a
+ * signal or if it successfully waited for a child.
+ */
+pid_t r_wait_all() {
+	pid_t childpid;
+	while (childpid = waitpid(-1, NULL, WNOHANG)) {
+		if ((childpid == -1) && (errno != EINTR)) {
+			break;
+		}
+	}
+	return childpid;
+}
+
+
 /* Private functions */
 static int gettimeout(struct timeval end,struct timeval *timeoutp) {
 	gettimeofday(timeoutp, NULL);

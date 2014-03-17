@@ -122,16 +122,16 @@ int h_len(const char** array) {
 /**
  * Returns TRUE if the string is in the given array.
  */
-bool h_str_in(const char *s, const char *a[]) {
-	int l = h_len(a);
-	int i=0;
-	for (i=0;i<l;i++) {
-		if (strcmp(s,a[i])==0) {
-			return TRUE;
-		}
-	}
-	return FALSE;
-}
+//bool h_str_in(const char *s, const char *a[]) {
+//	int l = h_len(a);
+//	int i=0;
+//	for (i=0;i<l;i++) {
+//		if (strcmp(s,a[i])==0) {
+//			return TRUE;
+//		}
+//	}
+//	return FALSE;
+//}
 
 ///**
 // * print to a string by appending the two

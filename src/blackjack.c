@@ -182,10 +182,6 @@ char *player_to_str(Player *player) {
 
 bool player_destroy(Player *player) {
 	assert(player!=NULL);
-//	int i=0;
-//	for (i=0;i<player->_num_cards;i++) {
-//		assert(card_destroy(player->cards[i]));
-//	}
 	free(player);
 	return TRUE;
 }
@@ -301,7 +297,7 @@ int player_cmp(Player *player,Player *dealer) {
 typedef struct Blackjack {
 	Card *deck[52]; // Cards still left in the deck
 	int _num_cards; // Cards left in the deck
-	Player *players[14]; // I guess you could have more...
+	Player *players[7]; // I guess you could have more...
 	int _num_players; // Players
 	bool finished;
 } Blackjack;
@@ -431,10 +427,9 @@ bool blackjack_deal_card(Blackjack *game, Player *player) {
 bool blackjack_remove_player(Blackjack *game,Player *player) {
 	int i=0;
 	bool found=FALSE;
-	if (game->_num_players<1) { // Can't remove the dealer
+	if(game->_num_players<1) {
 		return FALSE;
 	}
-
 	// Shift all the items in the array back one after found
 	for (i=0;i<game->_num_players;i++) {
 		if (game->players[i]==player) {
@@ -445,12 +440,12 @@ bool blackjack_remove_player(Blackjack *game,Player *player) {
 			game->players[i-1] = game->players[i];
 		}
 	}
-
 	if (found) {
 		game->_num_players--;
 	}
 	return found;
 }
+
 // ========================================= BLACKJACK =================================================
 
 
@@ -462,7 +457,6 @@ bool blackjack_remove_player(Blackjack *game,Player *player) {
 typedef struct Client {
 	int id;
 	pid_t pid;
-	int sfd[2]; // pipe fds for stdout
 	int rfd[2]; // pipe fds for read
 	int wfd[2]; // pipe fds for write
 } Client;
@@ -470,7 +464,7 @@ Client *client_create(int id);
 bool client_close(Client *client);
 int client_main();
 bool client_destroy(Client *client);
-int client_printf(Client *client,const char *fmt,...);
+void client_printf(Client *client,const char *fmt,...);
 int client_sendline(Client *client,const char *fmt,...);
 char *client_readline(Client *client);
 #endif
@@ -494,7 +488,7 @@ Client *client_create(int id) {
 		assert(r_close(client->rfd[0])!=-1); // client writes to rfd1, close 0
 		assert(r_close(client->wfd[1])!=-1); // client reads from wrf0, close 1;
 
-		client_main(client);
+		exit(client_main(client));
 	} else {
 		assert(r_close(client->rfd[1])!=-1); // parent reads from rfd0, close 1
 		assert(r_close(client->wfd[0])!=-1); // parent writes to wfd1, close 0
@@ -518,8 +512,7 @@ int client_sendline(Client *client,const char *fmt,...) {
 	va_start(args,fmt);
 	vasprintf(&msg,fmt,args);
 	int nbytes = r_write(fd,msg,(size_t)strlen(msg));
-	nbytes += r_write(fd,"\n",1);
-	client_printf(client,"Wrote '%s'\n",msg);
+	//client_printf(client,"Wrote '%s'\n",msg);
 	va_end(args);
 	free(msg);
 	return nbytes;
@@ -534,9 +527,13 @@ char *client_readline(Client *client) {
 	if (client->pid==0) {
 		fd=client->wfd[0]; // child
 	}
-	char *buf;
-	r_readline(fd,buf,256);
-	client_printf(client,"Read '%s'\n",buf);
+	size_t nbytes=256;
+	char *buf[nbytes];
+	int error = r_readline(fd,buf,nbytes);
+	if (error==-1) {
+		return NULL;
+	}
+	//client_printf(client,"Read '%s'\n",buf);
 	return buf;
 }
 
@@ -544,74 +541,94 @@ char *client_readline(Client *client) {
  * Client process function
  */
 int client_main(Client *client) {
-	char *resp;
 	size_t buf = 256;
+	char *resp;
+	char *cmd = malloc(buf*sizeof(char));
 	client_printf(client,"Hello from the client!\n");
-
 	while(TRUE) {
 		client_printf(client,"Waiting for cmd...\n");
-		char *cmd = client_readline(client);
+		strcpy(cmd,client_readline(client));
 
 		// TODO: Handle the cmd;
-		if (h_str_in(cmd,(char *[]){"AMT\n","bet\n"})) {
+		if (strcmp(cmd,"AMT\n")==0) {
 			client_printf(client,"How much money are you playing with?\n");
 			getline(&resp, &buf, stdin);
 			client_sendline(client,"%s",resp);
-		} else if (h_str_in(cmd,(char *[]){"BET\n","bet\n"}))  {
+		} else if (strcmp(cmd,"BET\n")==0)  {
 			client_printf(client,"What is your bet?\n");
 			getline(&resp, &buf, stdin);
 			client_sendline(client,"%s",resp);
-		}/* else if (h_str_in(cmd,(char*[]){"HIT\n","hit\n"})) {
+		} else if (strcmp(cmd,"HIT\n")==0) {
 			client_printf(client,"Would you like to hit (Y/N)?\n");
 			getline(&resp, &buf, stdin);
 			client_sendline(client,"%s",resp);
+		} else if (strstr(cmd, "CARDS") != NULL){
+			client_printf(client,"%s\n",cmd);
+			client_sendline(client,"Ok\n");
+		} else {
+			break;
 		}
-		*/
-		// if cmd==bet;
-		// elif cmd==hit;
-		// elif cmd==cards;
-		// etc...
-		free(cmd);
 	};
 	client_printf(client,"Goodbye!\n");
 	return EXIT_SUCCESS;
 }
 
-int client_printf(Client *client,const char *fmt,...) {
-	int bytes = 0;
+void client_printf(Client *client,const char *fmt,...) {
 	if(client->pid==0){
-		bytes +=printf("[Player%i] ",client->id);
+		printf("[Player%i] ",client->id);
 	} else {
-		bytes +=printf("[Dealer ] ");
+		printf("[Dealer ] ");
 	}
 	va_list args;
 	va_start(args,fmt);
-	bytes +=vprintf(fmt,args);
+	vprintf(fmt,args);
 	va_end(args);
 	fflush(stdout);
-	return bytes;
 }
 
 // ========================================= CLIENT =================================================
 
+
+
 int main(int argc, char *argv[]) {
 	Player *dealer;Player *player;
 	Blackjack *game;
-	Client *clients[14];
+	Client *clients[6];
 	int num_players;
 	int i;
-	char *cmd=NULL;
 	size_t buf=256;
+	char *cmd = malloc(buf*sizeof(char));
 
 	if (argc!=2) {
 		printf("Usage: blackjack <number_of_players>");
 		exit(1);
 	}
 	num_players = atoi(argv[1]);
-	if(!(1<num_players || num_players<13)) {
+	if(!(1<num_players || num_players<7)) {
 		printf("Usage: blackjack <number_of_players>");
-		printf("Error: Can only play with 1-13 players, given %i",num_players);
+		printf("Error: Can only play with 1-6 players, given %i",num_players);
 		exit(1);
+	}
+
+	/**
+	 * The program must implement signal handlers for the termination (SIGINT) and stop (SIGTSTP)
+	 * signals. If the program receives the termination signal (because all players left the game or from
+	 * the keyboard), the user should be prompted to shutdown the game or start a new game. If the
+	 * program receives the stop signal and there are no players left, the program should end gracefully;
+	 * if there are players still in the game, the signal should be ignored.
+	 */
+	void handle_signals(int signo) {
+		printf("Caught SIGINT or SIGTSTP!\n");
+		if (game->_num_players<2) {
+			exit(0);
+		}
+	}
+
+	struct sigaction act;
+	act.sa_handler = handle_signals;
+	act.sa_flags = 0;
+	if ((sigemptyset(&act.sa_mask) == -1) || (sigaction(SIGINT, &act, NULL) == -1) || (sigaction(SIGTSTP, &act, NULL) == -1)) {
+		perror("Failed to set SIGINT to handle Ctrl-C");
 	}
 
 	printf("\nWelcome to blackjack:\n");
@@ -638,15 +655,15 @@ int main(int argc, char *argv[]) {
 		// TODO: Ask each player to bet and handle responses/
 		//printf("Player %i, how much money are you playing with?\n",player->id);
 		//getline(&cmd, &buf, stdin);
-		client_sendline(clients[i],"AMT");
-		cmd = client_readline(clients[i]);
+		client_sendline(clients[i],"AMT\n");
+		strcpy(cmd,client_readline(clients[i]));
 		double money = strtod(cmd,NULL);
 
 		player->money = money;
 		printf("Player %i playing with $%0.2f\n",player->id,player->money);
 	}
 
-	// game loop
+	// main loop
 	while(game->_num_players>1) {
 		printf("\nStarting new round:\n");
 		printf("-----------------------------------\n");
@@ -659,11 +676,11 @@ int main(int argc, char *argv[]) {
 		for (i=1;i<(game->_num_players);i++) {
 			player = game->players[i];
 
-			// TODO: Ask each player to bet and handle responses
+			// Ask each player to bet and handle responses
 			//printf("Player %i, what is your bet?\n",player->id);
 			//getline(&cmd, &buf, stdin);
-			client_sendline(clients[i],"BET");
-			cmd = client_readline(clients[i]);
+			client_sendline(clients[i],"BET\n");
+			strcpy(cmd,client_readline(clients[i]));
 			double bet = strtod(cmd,NULL);
 
 			if (bet>0 && player_bet(player,bet)) {
@@ -680,27 +697,21 @@ int main(int argc, char *argv[]) {
 			break;
 		}
 
-		// TODO: Send player updated Player object to client so they can see their cards
-
-		// TODO: Ask each player to hit or stay and handle responses
+		// Ask each player to hit or stay and handle responses
 		for (i=1;i<(game->_num_players);i++) {
 			player = game->players[i];
 			printf("\nPlayer %i's turn:\n",player->id);
 			printf("-----------------------------------\n");
 			printf("Player %i has cards %s.\n",player->id,player_cards_to_str(player));
 
-			client_sendline(clients[i],"CARDS:%s",player_cards_to_str(player));
-			//cmd = client_readline(clients[i]);
-
 			while (!(player->busted)) {
 				//printf("Player %i, would you like to hit?\n",player->id);
 				//getline(&cmd, &buf, stdin);
-				client_sendline(clients[i],"HIT");
-				cmd = client_readline(clients[i]);
-				if (!(h_str_in(cmd,(char *[]){"Y\n","y\n"}))){break;}
+				client_sendline(clients[i],"HIT\n");
+				strcpy(cmd,client_readline(clients[i]));
+				if (!(strcmp(cmd,"Y\n")==0||strcmp(cmd,"y\n")==0)){break;}
 				assert(blackjack_deal_card(game,player));
 				printf("Player %i hit and got [%s] giving score of %i.\n",player->id,card_to_str(player->cards[player->_num_cards-1]),player->score);
-				client_sendline(clients[i],"CARDS:%s\n",player_cards_to_str(player));
 			}
 			if (player->busted) {
 				printf("Player %i busted.\n",player->id);
@@ -729,7 +740,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		// DONE: Round is over print out the hands
-		// TODO: Determine who won/lost and send that to the clients
+		// Determine who won/lost and send that to the clients
 		printf("\n\nRound results:\n");
 		printf("-----------------------------------\n");
 		for (i=1;i<(game->_num_players);i++) {
@@ -754,16 +765,17 @@ int main(int argc, char *argv[]) {
 		for (i=1;i<(game->_num_players);i++) {
 			player = game->players[i];
 			if (player->money<5) {
+				client_sendline(clients[i],"EXIT\n");
 				printf("Player %i left the table.\n",player->id);
 				assert(blackjack_remove_player(game,player));
 				i--;
 			}
 		}
-
 	}
 
+	// Wait for all to close
+	r_wait_all();
 
-
-	printf("Thanks for playing! HAVE A NICE DAY!");
+	printf("\nThanks for playing! HAVE A NICE DAY!\n");
 	return EXIT_SUCCESS;
 }

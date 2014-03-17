@@ -20,7 +20,7 @@
 #define ETIME ETIMEDOUT
 #endif
 
-int r_wait_all();
+pid_t r_wait_all();
 struct timeval r_add2currenttime(double seconds);
 int r_copyfile(int fromfd, int tofd);
 int r_close(int fildes);
